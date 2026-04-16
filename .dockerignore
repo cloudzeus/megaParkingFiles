@@ -1,0 +1,34 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build
+.next
+out
+
+# Git
+.git
+.gitignore
+
+# IDE / OS
+.cursor
+.vscode
+*.swp
+.DS_Store
+
+# Env (inject at runtime)
+.env
+.env.*
+!.env.example
+
+# Misc
+*.md
+*.log
+npm-debug.log*
+.pnpm-debug.log*
+
+# Tests / tooling
+coverage
+.nyc_output
+*.test.*
+*.spec.*

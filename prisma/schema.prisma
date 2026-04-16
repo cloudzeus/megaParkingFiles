@@ -1,0 +1,551 @@
+// FileShareX – Auth.js (NextAuth v5) + RBAC schema
+// User.id is String (cuid) for Auth.js Prisma adapter compatibility
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ============ Enums ============
+
+enum UserRole {
+  SUPER_ADMIN
+  COMPANY_ADMIN
+  DEPARTMENT_MANAGER
+  EMPLOYEE
+  AUDITOR
+  DPO
+}
+
+enum MalwareStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  FAILED
+}
+
+enum GdprRiskLevel {
+  UNKNOWN
+  NO_PII_DETECTED
+  POSSIBLE_PII
+  CONFIRMED_PII
+}
+
+enum ClassificationStatus {
+  PENDING
+  DONE
+  FAILED
+}
+
+enum DeletionStatus {
+  ACTIVE
+  SOFT_DELETED
+  PENDING_ERASURE
+  ERASED
+}
+
+enum ShareType {
+  INTERNAL_LINK
+  EXTERNAL_OTP
+}
+
+enum ShareAccessReason {
+  OK
+  EXPIRED
+  WRONG_OTP
+  GDPR_BLOCKED
+  MALWARE_BLOCKED
+  OTHER
+}
+
+enum EventType {
+  FILE_UPLOAD
+  FILE_DOWNLOAD
+  FILE_DELETE
+  FILE_MOVE
+  FILE_RENAME
+  FOLDER_CREATE
+  FOLDER_DELETE
+  FILE_SHARE_CREATE
+  FILE_SHARE_ACCESS
+  FILE_SHARE_REVOKE
+  POLICY_CREATE
+  POLICY_UPDATE
+  POLICY_ASSIGN
+  GDPR_PII_DETECTED
+  GDPR_SHARE_BLOCKED
+  GDPR_ERASURE_COMPLETED
+  MALWARE_SCAN_STARTED
+  MALWARE_SCAN_RESULT
+  USER_LOGIN
+  USER_LOGOUT
+  USER_ROLE_CHANGE
+}
+
+enum TargetType {
+  FILE
+  FOLDER
+  USER
+  DEPARTMENT
+  COMPANY
+  POLICY
+  SHARE
+  OTHER
+}
+
+enum FolderPermissionSubjectType {
+  DEPARTMENT
+  ROLE
+  USER
+}
+
+// ============ Core: Company & Department ============
+
+model Company {
+  id                          Int                 @id @default(autoincrement())
+  name                        String
+  slug                        String              @unique
+  isDefault                   Boolean             @default(false) // Single main company for DR/file share & GDPR; others only for sharing
+  country                     String?
+  address                     String?
+  afm                         String?             @unique // ΑΦΜ (Greek tax ID) – only one per company
+  activity                    String?             // Δραστηριότητα
+  bunnyStorageZoneName        String?
+  bunnyStorageAccessKey       String?
+  defaultDataRetentionPolicyId Int?             @unique
+  dpoUserId                   String?           @unique // Υπεύθυνος Προστασίας Δεδομένων (DPO)
+  securityOfficerUserId       String?           @unique // Υπεύθυνος Ασφαλείας Πληροφοριών
+
+  departments                 Department[]
+  users                       User[]
+  folders                     Folder[]
+  files                       File[]
+  retentionPolicies           RetentionPolicy[]
+  erasureProofs               ErasureProof[]
+  fileShares                  FileShare[]
+  auditLogs                   AuditLog[]
+  fileCategories              FileCategory[]
+  apiKeys                     ApiKey[]
+
+  createdAt                   DateTime            @default(now())
+  updatedAt                   DateTime            @updatedAt
+
+  defaultRetentionPolicy      RetentionPolicy?    @relation("CompanyDefaultPolicy", fields: [defaultDataRetentionPolicyId], references: [id])
+  dpo                         User?               @relation("CompanyDPO", fields: [dpoUserId], references: [id], onDelete: SetNull)
+  securityOfficer             User?               @relation("CompanySecurityOfficer", fields: [securityOfficerUserId], references: [id], onDelete: SetNull)
+}
+
+// ============ API Keys (user or department scoped) ============
+
+model ApiKey {
+  id           Int       @id @default(autoincrement())
+  companyId    Int
+  userId       String
+  departmentId Int?
+  name         String
+  keyHash      String    @unique
+  keyPrefix    String
+  expiresAt    DateTime?
+  lastUsedAt   DateTime?
+
+  company      Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user         User       @relation("ApiKeyOwner", fields: [userId], references: [id], onDelete: Cascade)
+  department   Department? @relation("DepartmentApiKeys", fields: [departmentId], references: [id], onDelete: SetNull)
+
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([keyHash])
+  @@index([companyId, userId])
+}
+
+model Department {
+  id          Int       @id @default(autoincrement())
+  companyId   Int
+  name        String
+  description String?
+
+  company     Company   @relation(fields: [companyId], references: [id])
+  users       User[]
+  folders     Folder[]
+  files       File[]
+  apiKeys     ApiKey[]  @relation("DepartmentApiKeys")
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([companyId])
+}
+
+// ============ User: Auth.js compatible (String id) + RBAC ============
+
+model User {
+  id              String    @id @default(cuid())
+  name            String?
+  email           String?   @unique
+  emailVerified   DateTime?
+  image           String?
+  // RBAC & tenant
+  companyId       Int
+  departmentId    Int?
+  hashedPassword  String?   @db.Text
+  role            UserRole  @default(EMPLOYEE)
+  isActive        Boolean   @default(true)
+
+  company         Company   @relation(fields: [companyId], references: [id])
+  department      Department? @relation(fields: [departmentId], references: [id])
+  companyAsDpo    Company?  @relation("CompanyDPO")
+  companyAsSecurityOfficer Company? @relation("CompanySecurityOfficer")
+
+  accounts        Account[]
+  sessions        Session[]
+
+  createdFiles    File[]     @relation("FileCreatedBy")
+  createdFolders  Folder[]   @relation("FolderCreatedBy")
+  createdShares   FileShare[] @relation("ShareCreatedBy")
+  erasures        ErasureProof[] @relation("ErasureByUser")
+  auditLogs       AuditLog[] @relation("AuditActor")
+  apiKeys         ApiKey[]   @relation("ApiKeyOwner")
+
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([companyId])
+  @@index([companyId, role])
+}
+
+// Auth.js Prisma adapter models (exact names required)
+
+model Account {
+  id                String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String? @db.Text
+  access_token       String? @db.Text
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String? @db.Text
+  session_state      String?
+
+  user               User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@id([identifier, token])
+}
+
+// ============ File system ============
+
+model Folder {
+  id                    Int          @id @default(autoincrement())
+  companyId             Int
+  parentFolderId        Int?
+  departmentId          Int?
+  name                  String
+  path                  String
+  isDepartmentRoot      Boolean      @default(false)
+  containsPersonalData  Boolean      @default(false)
+  createdByUserId       String
+
+  company          Company      @relation(fields: [companyId], references: [id])
+  parentFolder     Folder?      @relation("FolderToSubfolders", fields: [parentFolderId], references: [id])
+  subfolders       Folder[]     @relation("FolderToSubfolders")
+  department       Department?  @relation(fields: [departmentId], references: [id])
+  createdBy        User         @relation("FolderCreatedBy", fields: [createdByUserId], references: [id])
+
+  files            File[]
+  permissions      FolderPermission[]
+
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([companyId, parentFolderId])
+  @@index([companyId])
+  @@index([departmentId])
+}
+
+model File {
+  id                    Int                 @id @default(autoincrement())
+  companyId             Int
+  folderId              Int
+  departmentId          Int?
+  name                  String
+  extension             String?
+  sizeBytes             Int
+  mimeType              String?
+  bunnyStoragePath      String
+  createdByUserId       String
+  uploadedAt            DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  malwareStatus         MalwareStatus        @default(PENDING)
+  gdprRiskLevel         GdprRiskLevel        @default(UNKNOWN)
+  classificationStatus  ClassificationStatus @default(PENDING)
+  deletionStatus        DeletionStatus       @default(ACTIVE)
+  deletionProofId       Int?                 @unique
+
+  company               Company             @relation(fields: [companyId], references: [id])
+  folder                Folder              @relation(fields: [folderId], references: [id])
+  department            Department?         @relation(fields: [departmentId], references: [id])
+  createdBy             User                @relation("FileCreatedBy", fields: [createdByUserId], references: [id])
+  deletionProof         ErasureProof?       @relation("FileDeletionProof", fields: [deletionProofId], references: [id])
+
+  versions              FileVersion[]
+  retentions            FileRetention[]
+  tags                  FileTag[]
+  shares                FileShare[]
+  categories            FileCategory[]       @relation("FileCategories")
+  classificationJobs    FileClassificationJob[]
+  shareAccessEvents     FileShareAccess[]
+  erasureProofs         ErasureProof[]      @relation("FileErasureProofs")
+
+  createdAt             DateTime            @default(now())
+
+  @@index([companyId, folderId])
+  @@index([folderId])
+  @@index([companyId, deletionStatus])
+  @@index([departmentId])
+  @@index([createdByUserId])
+}
+
+model FileVersion {
+  id               Int      @id @default(autoincrement())
+  fileId           Int
+  versionNumber    Int
+  bunnyStoragePath String
+  hash             String?
+  sizeBytes        Int
+  createdAt        DateTime @default(now())
+
+  file             File     @relation(fields: [fileId], references: [id])
+
+  @@index([fileId])
+}
+
+model FolderPermission {
+  id          Int                         @id @default(autoincrement())
+  folderId    Int
+  subjectType FolderPermissionSubjectType
+  subjectId   Int
+  canRead     Boolean                     @default(true)
+  canWrite    Boolean                     @default(false)
+  canShare    Boolean                     @default(false)
+  canManage   Boolean                     @default(false)
+
+  folder      Folder                      @relation(fields: [folderId], references: [id])
+
+  @@index([folderId])
+}
+
+// ============ Retention & erasure ============
+
+model RetentionPolicy {
+  id                Int        @id @default(autoincrement())
+  companyId         Int
+  name              String
+  description       String?
+  durationDays      Int?
+  autoDelete        Boolean    @default(false)
+  legalHoldAllowed  Boolean    @default(true)
+
+  company           Company    @relation(fields: [companyId], references: [id])
+  companyDefaultPolicy Company? @relation("CompanyDefaultPolicy")
+
+  fileRetentions    FileRetention[]
+  erasureProofs     ErasureProof[]
+
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  @@index([companyId])
+}
+
+model FileRetention {
+  id              Int       @id @default(autoincrement())
+  fileId          Int
+  policyId        Int
+  effectiveFrom   DateTime  @default(now())
+  effectiveTo     DateTime?
+  underLegalHold  Boolean   @default(false)
+  lastEvaluatedAt DateTime?
+
+  file            File      @relation(fields: [fileId], references: [id])
+  policy          RetentionPolicy @relation(fields: [policyId], references: [id])
+
+  @@index([fileId])
+  @@index([policyId])
+}
+
+model ErasureProof {
+  id                   Int        @id @default(autoincrement())
+  companyId            Int
+  fileId               Int
+  policyId             Int?
+  erasedAt             DateTime
+  erasedBySystemUserId String?
+  method               String
+  bunnyDeleteResponse  Json?
+  hashBeforeDelete     String?
+
+  company              Company    @relation(fields: [companyId], references: [id])
+  file                 File       @relation("FileErasureProofs", fields: [fileId], references: [id])
+  policy               RetentionPolicy? @relation(fields: [policyId], references: [id])
+  erasedBy             User?      @relation("ErasureByUser", fields: [erasedBySystemUserId], references: [id])
+  deletionProofFor     File?      @relation("FileDeletionProof")
+
+  @@index([companyId])
+  @@index([fileId])
+}
+
+// ============ AI classification ============
+
+model FileCategory {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  name        String
+  description String?
+
+  company     Company  @relation(fields: [companyId], references: [id])
+
+  files       File[]   @relation("FileCategories")
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([companyId])
+}
+
+model FileTag {
+  id        Int     @id @default(autoincrement())
+  fileId    Int
+  key       String
+  value     String
+  source    String
+
+  file      File    @relation(fields: [fileId], references: [id])
+
+  @@index([fileId])
+}
+
+model FileClassificationJob {
+  id                        Int                 @id @default(autoincrement())
+  fileId                    Int
+  status                    ClassificationStatus @default(PENDING)
+  deepseekRequestPayload    Json?
+  deepseekResponsePayload   Json?
+  createdAt                 DateTime            @default(now())
+  updatedAt                 DateTime            @updatedAt
+
+  file                      File                @relation(fields: [fileId], references: [id])
+
+  @@index([fileId])
+}
+
+// ============ Sharing & OTP ============
+
+model FileShare {
+  id                   Int        @id @default(autoincrement())
+  companyId            Int
+  fileId               Int
+  createdByUserId      String
+  shareType            ShareType  @default(EXTERNAL_OTP)
+  requireOtp           Boolean    @default(true)
+  otpSaltedHash        String?
+  otpLength            Int?
+  createdAt            DateTime   @default(now())
+  expiresAt            DateTime?
+  maxDownloads         Int?
+  remainingDownloads   Int?
+  isRevoked            Boolean    @default(false)
+  lastOtpSentAt        DateTime?
+
+  company              Company    @relation(fields: [companyId], references: [id])
+  file                 File       @relation(fields: [fileId], references: [id])
+  createdBy            User       @relation("ShareCreatedBy", fields: [createdByUserId], references: [id])
+  accesses             FileShareAccess[]
+
+  @@index([fileId])
+  @@index([companyId])
+}
+
+model FileShareAccess {
+  id          Int                @id @default(autoincrement())
+  shareId     Int
+  fileId      Int?
+  accessedAt  DateTime           @default(now())
+  ipAddress   String?
+  userAgent   String?
+  success     Boolean            @default(false)
+  reason      ShareAccessReason  @default(OTHER)
+  download    Boolean            @default(false)
+
+  share       FileShare          @relation(fields: [shareId], references: [id])
+  file        File?              @relation(fields: [fileId], references: [id])
+
+  @@index([shareId])
+  @@index([fileId])
+}
+
+// ============ Audit logging ============
+
+model AuditLog {
+  id           Int         @id @default(autoincrement())
+  companyId    Int
+  actorUserId  String?
+  eventType    EventType
+  targetType   TargetType
+  targetId     Int?
+  ipAddress    String?
+  userAgent    String?
+  metadata     Json?
+  createdAt    DateTime    @default(now())
+
+  company      Company     @relation(fields: [companyId], references: [id])
+  actor        User?       @relation("AuditActor", fields: [actorUserId], references: [id])
+
+  @@index([companyId, createdAt])
+  @@index([companyId, eventType])
+}
+
+// ============ DB backups (system-level, Super Admin) ============
+
+enum DbBackupStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model DbBackup {
+  id                 Int            @id @default(autoincrement())
+  filename           String
+  bunnyStoragePath   String
+  sizeBytes          Int
+  status             DbBackupStatus @default(RUNNING)
+  errorMessage       String?        @db.Text
+  startedAt          DateTime      @default(now())
+  completedAt        DateTime?
+
+  @@index([startedAt])
+}
