@@ -39,23 +39,18 @@ async function main() {
   // DEFAULT COMPANY: ΑΦΟΙ ΚΟΛΛΕΡΗΣ ΙΚΕ
   // ══════════════════════════════════════════════════════════════════════
 
+  // Ensure only one default company
+  await prisma.company.updateMany({ where: { isDefault: true }, data: { isDefault: false } });
+
   const company = await prisma.company.upsert({
-    where: { slug: "kolleris_ike" },
+    where: { slug: "megaparking" },
     update: {
-      name: "ΑΦΟΙ ΚΟΛΛΕΡΗΣ ΙΚΕ",
-      country: "GR",
-      address: "Κ. Μαυρομιχάλη 4, Θεσσαλονίκη 54621",
-      afm: "801234567",
-      activity: "Εμπόριο ηλεκτρονικών ειδών & τεχνολογίας",
       isDefault: true,
     },
     create: {
-      name: "ΑΦΟΙ ΚΟΛΛΕΡΗΣ ΙΚΕ",
-      slug: "kolleris_ike",
+      name: "ΑΦΟΙ Ι ΚΟΛΛΕΡΗ ΕΠΕ",
+      slug: "megaparking",
       country: "GR",
-      address: "Κ. Μαυρομιχάλη 4, Θεσσαλονίκη 54621",
-      afm: "801234567",
-      activity: "Εμπόριο ηλεκτρονικών ειδών & τεχνολογίας",
       isDefault: true,
     },
   });
@@ -151,6 +146,16 @@ async function main() {
     });
     users[u.email] = user;
   }
+
+  // Clear any stale DPO/Security Officer assignments from other companies
+  await prisma.company.updateMany({
+    where: { dpoUserId: users["th.vlachou@kolleris.gr"].id },
+    data: { dpoUserId: null },
+  });
+  await prisma.company.updateMany({
+    where: { securityOfficerUserId: users["a.stavrou@kolleris.gr"].id },
+    data: { securityOfficerUserId: null },
+  });
 
   // Assign DPO & Security Officer
   await prisma.company.update({

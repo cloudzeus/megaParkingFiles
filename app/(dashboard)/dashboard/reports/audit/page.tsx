@@ -6,7 +6,7 @@ import { el, eventTypeLabel } from "@/lib/i18n";
 import { redirect } from "next/navigation";
 import { ReportsAuditFilter } from "../reports-audit-filter";
 
-const AUDIT_PAGE_SIZE = 100;
+const AUDIT_PAGE_SIZE = 200;
 const RECENT_DAYS = 7;
 
 type SearchParams = { eventType?: string };
